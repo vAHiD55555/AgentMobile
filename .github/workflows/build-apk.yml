@@ -1,0 +1,423 @@
+# Build Android APK (debug + release) AND publish them to a GitHub Release
+# for the AgentMobile project.
+#
+# Project type : native Android (Kotlin / Jetpack Compose) with a Rust core
+#                (Module ":app" -> depends on ":lib" -> Rust crate via uniffi/gobley)
+# Toolchain     : JDK 17 (temurin), Android SDK API 35, NDK 27.2.12479018,
+#                Rust stable + targets aarch64-linux-android & x86_64-linux-android
+# Outputs       : app/build/outputs/apk/debug/*.apk  and  .../release/*.apk
+#
+# Triggers:
+#   * push to main/master        -> build + upload artifacts only (NO release)
+#   * push a tag matching "v*"   -> build + upload artifacts + GitHub Release named after the tag
+#   * manual workflow_dispatch   -> build + upload artifacts; creates a Release ONLY if
+#                                   the optional "release_tag" input is filled in
+#
+# Release notes (body) layout, built automatically in the "release" job:
+#   1. release banner image
+#   2. Persian summary (خلاصه‌ی فارسی): app + version, signing type, APK list,
+#      direct download links, and a Persian warning when signed with a debug key
+#   3. build info table (English)
+#   4. APK asset list
+#   5. simple changelog from commits since the previous "v*" tag
+#
+# Banner resolution order (see the "Prepare release assets and notes" step):
+#   a) repository Variable RELEASE_BANNER_URL, if set
+#   b) the committed file .github/assets/release-banner.png, referenced through an
+#      ABSOLUTE raw URL (github.com/<repo>/raw/<sha>/...) so it renders both in
+#      the Release body and in the README
+#   c) a stable fallback image URL
+#
+# Place this file at: .github/workflows/build-apk.yml
+name: Build APK
+
+on:
+  push:
+    branches: [main, master]   # default branch of this repo is "master"
+    tags: ['v*']               # e.g. v0.0.37 -> creates a GitHub Release
+  workflow_dispatch:           # allow manual runs from the Actions tab
+    inputs:
+      release_tag:
+        description: "Optional tag/version for the GitHub Release (e.g. v0.0.37). Leave empty to only build artifacts and create no release."
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # JOB 1 — build debug + release APKs and expose them as workflow artifacts
+  # ---------------------------------------------------------------------------
+  build-apk:
+    name: Build debug & release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    concurrency:
+      group: build-apk-${{ github.ref }}
+      cancel-in-progress: true
+    outputs:
+      version_name: ${{ steps.vars.outputs.version_name }}
+      version_code: ${{ steps.vars.outputs.version_code }}
+      signing: ${{ steps.signing.outputs.signing }}
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # Optional: some forks carry patches for the vendored "zeroclaw" submodule.
+      # This is a no-op when no patches/ directory exists.
+      - name: Apply submodule patches (optional)
+        run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Accept licenses and install SDK / NDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null 2>&1 || true
+          sdkmanager --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
+
+      - name: Set up Rust (stable + Android targets)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android, x86_64-linux-android
+
+      - name: Install cargo-ndk
+        run: cargo install cargo-ndk --locked
+
+      - name: Rust cache
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: agentmobile -> target
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      # ------------------------------------------------------------------
+      # Signing: use a real keystore when the secrets are present, otherwise
+      # fall back to an auto-generated debug key so the release APK is still
+      # signed and installable (NOT suitable for production / store upload).
+      # ------------------------------------------------------------------
+      - name: Configure signing
+        id: signing
+        env:
+          KEYSTORE_BASE64: ${{ secrets.RELEASE_KEYSTORE_BASE64 }}
+          STORE_PASSWORD: ${{ secrets.RELEASE_STORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.RELEASE_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.RELEASE_KEY_PASSWORD }}
+        run: |
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            echo "signing=release" >> "$GITHUB_OUTPUT"
+            echo "$KEYSTORE_BASE64" | base64 -d > release.jks
+            {
+              echo "RELEASE_STORE_FILE=../release.jks"
+              echo "RELEASE_STORE_PASSWORD=$STORE_PASSWORD"
+              echo "RELEASE_KEY_ALIAS=$KEY_ALIAS"
+              echo "RELEASE_KEY_PASSWORD=$KEY_PASSWORD"
+            } >> local.properties
+            echo "Using the real release keystore from repository secrets."
+          else
+            echo "signing=debug" >> "$GITHUB_OUTPUT"
+            keytool -genkeypair -v \
+              -keystore debug.keystore \
+              -storepass android -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US"
+            {
+              echo "RELEASE_STORE_FILE=../debug.keystore"
+              echo "RELEASE_STORE_PASSWORD=android"
+              echo "RELEASE_KEY_ALIAS=androiddebugkey"
+              echo "RELEASE_KEY_PASSWORD=android"
+            } >> local.properties
+            echo "No release keystore found -> signing the release APK with a debug key (NOT for production)."
+          fi
+          echo "--- local.properties ---"
+          cat local.properties
+
+      - name: Build debug APK
+        run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Read app version
+        id: vars
+        run: |
+          VC=$(grep -m1 'versionCode' app/build.gradle.kts | sed 's/[^0-9]//g')
+          VN=$(grep -m1 'versionName' app/build.gradle.kts | sed 's/.*"\(.*\)".*/\1/')
+          echo "version_name=$VN" >> "$GITHUB_OUTPUT"
+          echo "version_code=$VC" >> "$GITHUB_OUTPUT"
+          echo "App version: $VN ($VC)"
+
+      - name: Collect and rename APKs
+        run: |
+          mkdir -p out
+          VN="${{ steps.vars.outputs.version_name }}"
+          VC="${{ steps.vars.outputs.version_code }}"
+          find app/build/outputs/apk -name '*.apk' -print || true
+          cp app/build/outputs/apk/debug/*.apk   "out/AgentMobile-${VN}-${VC}-debug.apk"   2>/dev/null || true
+          cp app/build/outputs/apk/release/*.apk "out/AgentMobile-${VN}-${VC}-release.apk" 2>/dev/null || true
+          ls -la out
+
+      - name: Upload debug APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentMobile-debug-apk
+          path: out/*debug.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Upload release APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: AgentMobile-release-apk
+          path: out/*release.apk
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Clean up signing material
+        if: always()
+        run: rm -f release.jks debug.keystore local.properties
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## APK Build Summary"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| Project | native Android (Kotlin/Compose) + Rust core (zeroclaw-ffi) |"
+            echo "| Toolchain | JDK 17, Android SDK 35, NDK 27.2.12479018, Rust stable |"
+            echo "| App version | ${{ steps.vars.outputs.version_name }} (${{ steps.vars.outputs.version_code }}) |"
+            echo "| Release signing | ${{ steps.signing.outputs.signing }} |"
+            echo ""
+            if [ "${{ steps.signing.outputs.signing }}" = "debug" ]; then
+              echo "> :warning: The release APK is signed with a **debug key**. Add the secrets below for production signing."
+            fi
+            echo ""
+            echo "Artifacts: \`AgentMobile-debug-apk\`, \`AgentMobile-release-apk\`"
+          } >> "$GITHUB_STEP_SUMMARY"
+
+  # ---------------------------------------------------------------------------
+  # JOB 2 — publish the built APKs to a GitHub Release
+  #   * runs only for a "v*" tag push, or a manual run with a filled release_tag
+  #   * does NOT run for a plain push to main/master (artifacts only)
+  #   * re-running the same tag updates the existing release instead of failing
+  # ---------------------------------------------------------------------------
+  release:
+    name: Publish GitHub Release
+    needs: build-apk
+    runs-on: ubuntu-latest
+    if: ${{ startsWith(github.ref, 'refs/tags/v') || (github.event_name == 'workflow_dispatch' && inputs.release_tag != '') }}
+    permissions:
+      contents: write          # required to create the release and upload assets
+    env:
+      # Tag push -> the pushed tag; manual run -> the release_tag input.
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+
+    steps:
+      - name: Checkout (full history for changelog / tags)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+
+      # ------------------------------------------------------------------
+      # Build the release body:
+      #   banner -> Persian summary -> build table -> assets -> changelog
+      # All Persian text is emitted through bash "echo" in a UTF-8 locale, so
+      # the heredoc-free approach avoids any encoding / escaping pitfalls.
+      # ------------------------------------------------------------------
+      - name: Prepare release assets and notes
+        env:
+          VERSION_NAME: ${{ needs.build-apk.outputs.version_name }}
+          VERSION_CODE: ${{ needs.build-apk.outputs.version_code }}
+          SIGNING: ${{ needs.build-apk.outputs.signing }}
+          BANNER_URL_VAR: ${{ vars.RELEASE_BANNER_URL }}
+        run: |
+          set -euo pipefail
+          export LC_ALL=C.UTF-8 LANG=C.UTF-8
+          mkdir -p release-assets
+
+          # Prefer the app's versionName; fall back to the tag without a leading "v".
+          VER="${VERSION_NAME:-${RELEASE_TAG#v}}"
+          echo "Resolved version: ${VER}"
+
+          REPO_URL="${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}"
+          DOWNLOAD_BASE="${REPO_URL}/releases/download/${RELEASE_TAG}"
+          BANNER_FILE=".github/assets/release-banner.png"
+          BANNER_FALLBACK="https://static.teamily.ai/sites/34231636-f2ab-4935-8825-80d6b2676126/images/release_banner/release_banner.png"
+
+          # --- Banner resolution: repo variable > committed file (absolute raw URL) > stable fallback ---
+          if [ -n "${BANNER_URL_VAR:-}" ]; then
+            BANNER_IMG="${BANNER_URL_VAR}"
+            echo "Banner source: repository variable RELEASE_BANNER_URL"
+          elif [ -f "$BANNER_FILE" ] && git cat-file -e "HEAD:${BANNER_FILE}" 2>/dev/null; then
+            # Absolute raw URL built from the current commit -> the image renders inside
+            # the Release body itself (a bare relative path would resolve against the
+            # repository, not the release page).
+            BANNER_IMG="${REPO_URL}/raw/${GITHUB_SHA}/${BANNER_FILE}"
+            echo "Banner source: committed file $BANNER_FILE (absolute raw URL)"
+          else
+            BANNER_IMG="$BANNER_FALLBACK"
+            echo "Banner source: stable fallback URL (commit $BANNER_FILE to use the repo file)"
+          fi
+
+          DEBUG_SRC="$(find dist -type f -name '*.apk' -path '*debug*' | head -n1 || true)"
+          REL_SRC="$(find dist -type f -name '*.apk' -path '*release*' | head -n1 || true)"
+
+          DEBUG_NAME=""
+          REL_NAME=""
+          if [ -n "$DEBUG_SRC" ]; then
+            DEBUG_NAME="AgentMobile-${VER}-debug.apk"
+            cp "$DEBUG_SRC" "release-assets/${DEBUG_NAME}"
+          fi
+          if [ -n "$REL_SRC" ]; then
+            REL_NAME="AgentMobile-${VER}-release.apk"
+            cp "$REL_SRC" "release-assets/${REL_NAME}"
+          fi
+
+          if [ -z "$DEBUG_NAME" ] && [ -z "$REL_NAME" ]; then
+            echo "::error::No APK files were found to attach to the release."
+            exit 1
+          fi
+
+          # --- Simple changelog: commits since the previous "v*" tag (or last 20) ---
+          PREV_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -v -x "${RELEASE_TAG}" | head -n1 || true)"
+          CHANGES=""
+          if [ -n "$PREV_TAG" ]; then
+            CHANGES="$(git log --no-merges --pretty=format:'- %s (%h)' "${PREV_TAG}..${RELEASE_TAG}" || true)"
+          fi
+          if [ -z "$CHANGES" ]; then
+            CHANGES="$(git log --no-merges -n 20 --pretty=format:'- %s (%h)' || true)"
+          fi
+          [ -n "$CHANGES" ] || CHANGES="_No commit information available._"
+
+          # --- Persian signing label ---
+          if [ "${SIGNING:-}" = "release" ]; then
+            SIGN_FA="ریلیز — امضاشده با کلید واقعی (keystore پروژه)"
+          elif [ "${SIGNING:-}" = "debug" ]; then
+            SIGN_FA="دیباگ — امضاشده با کلید دیباگ (بدون keystore واقعی)"
+          else
+            SIGN_FA="${SIGNING:-نامشخص}"
+          fi
+
+          # ===================== Release body =====================
+          {
+            echo "# AgentMobile ${RELEASE_TAG}"
+            echo ""
+            echo "![AgentMobile release banner](${BANNER_IMG})"
+            echo ""
+            echo "## خلاصه‌ی فارسی"
+            echo ""
+            echo "**برنامه:** AgentMobile — اپلیکیشن اندروید (Kotlin + Jetpack Compose با هسته‌ی Rust)"
+            echo ""
+            echo "**نسخه:** \`${VER}\` (versionCode \`${VERSION_CODE:-?}\`) — تگ \`${RELEASE_TAG}\`"
+            echo ""
+            echo "**نوع امضا:** ${SIGN_FA}"
+            echo ""
+            echo "**فایل‌های APK ضمیمه‌شده:**"
+            echo ""
+            if [ -n "$DEBUG_NAME" ]; then
+              echo "- [\`${DEBUG_NAME}\`](${DOWNLOAD_BASE}/${DEBUG_NAME}) — نسخه‌ی دیباگ (برای تست سریع)"
+            fi
+            if [ -n "$REL_NAME" ]; then
+              echo "- [\`${REL_NAME}\`](${DOWNLOAD_BASE}/${REL_NAME}) — نسخه‌ی ریلیز"
+            fi
+            echo ""
+            echo "**لینک دانلود مستقیم:**"
+            echo ""
+            if [ -n "$REL_NAME" ]; then
+              echo "- ریلیز: ${DOWNLOAD_BASE}/${REL_NAME}"
+            fi
+            if [ -n "$DEBUG_NAME" ]; then
+              echo "- دیباگ: ${DOWNLOAD_BASE}/${DEBUG_NAME}"
+            fi
+            echo ""
+            if [ "${SIGNING:-}" = "debug" ]; then
+              echo "> ⚠️ **هشدار:** این نسخه‌ی release با **کلید دیباگ** امضا شده است، چون keystore واقعی در Secrets تنظیم نشده."
+              echo "> فایل نصب‌شدنی است اما برای انتشار در Google Play یا استفاده‌ی تولیدی مناسب نیست."
+              echo "> برای فعال‌کردن امضای واقعی این چهار Secret را تنظیم کنید: \`RELEASE_KEYSTORE_BASE64\`، \`RELEASE_STORE_PASSWORD\`، \`RELEASE_KEY_ALIAS\`، \`RELEASE_KEY_PASSWORD\`."
+              echo ""
+            fi
+            echo "---"
+            echo ""
+            echo "## Build info"
+            echo ""
+            echo "| Item | Value |"
+            echo "| --- | --- |"
+            echo "| App version | ${VER} (code ${VERSION_CODE:-?}) |"
+            echo "| Release signing | ${SIGNING:-unknown} |"
+            echo "| Commit | \`${GITHUB_SHA}\` |"
+            echo "| Trigger | \`${GITHUB_REF}\` |"
+            echo ""
+            echo "## APK assets"
+            echo ""
+            if [ -n "$DEBUG_NAME" ]; then
+              echo "- \`${DEBUG_NAME}\` — debug build"
+            fi
+            if [ -n "$REL_NAME" ]; then
+              echo "- \`${REL_NAME}\` — release build"
+            fi
+            echo ""
+            echo "## Changelog"
+            echo ""
+            if [ -n "$PREV_TAG" ]; then
+              echo "Changes since \`${PREV_TAG}\`:"
+              echo ""
+            fi
+            echo "$CHANGES"
+          } > release-body.md
+
+          echo "---- release-body.md ----"
+          cat release-body.md
+          echo "---- assets ----"
+          ls -la release-assets
+
+      - name: Create or update GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: ${{ env.RELEASE_TAG }}
+          body_path: release-body.md
+          files: release-assets/*.apk
+          fail_on_unmatched_files: true   # fail loudly if no APK matched
+          overwrite_files: true           # same-name assets are replaced, not duplicated -> no "already_exists" error
+          make_latest: true
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Release summary
+        run: |
+          {
+            echo "## GitHub Release \`${{ env.RELEASE_TAG }}\`"
+            echo ""
+            echo "### Assets"
+            echo ""
+            ls -1 release-assets | sed 's/^/- /'
+            echo ""
+            echo "### خلاصه (فارسی)"
+            echo ""
+            echo "نسخه‌ی ${{ needs.build-apk.outputs.version_name }} (${{ needs.build-apk.outputs.version_code }}) با امضای **${{ needs.build-apk.outputs.signing }}** منتشر شد."
+            echo ""
+            echo "[مشاهده‌ی Release](${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/releases/tag/${{ env.RELEASE_TAG }})"
+          } >> "$GITHUB_STEP_SUMMARY"
