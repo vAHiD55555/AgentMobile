@@ -19,6 +19,9 @@ concurrency:
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
+  # The GitHub-hosted ubuntu runner ships a complete Android SDK here.
+  ANDROID_HOME: /usr/local/lib/android/sdk
+  ANDROID_SDK_ROOT: /usr/local/lib/android/sdk
 
 jobs:
   lint-rust:
@@ -31,6 +34,20 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+        working-directory: .   # this job defaults to "agentmobile"; run from the repo root
 
       - name: Apply submodule patches
         run: if ls ../patches/*.patch 1>/dev/null 2>&1; then git apply ../patches/*.patch; fi
@@ -59,6 +76,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -67,7 +97,14 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used (see above).
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v4
@@ -85,6 +122,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
 
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
@@ -104,6 +154,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -112,10 +175,26 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used: it runs
+      # `sdkmanager tools`, and the legacy "tools" package is no longer published
+      # upstream, so the action fails with "Failed to find package 'tools'".
+      # The runner already ships a complete Android SDK; we just use it.
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
+      - name: Install Android SDK components (platform, build-tools, NDK)
+        run: |
+          SDKMGR="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -151,6 +230,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -159,10 +251,26 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used: it runs
+      # `sdkmanager tools`, and the legacy "tools" package is no longer published
+      # upstream, so the action fails with "Failed to find package 'tools'".
+      # The runner already ships a complete Android SDK; we just use it.
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
+      - name: Install Android SDK components (platform, build-tools, NDK)
+        run: |
+          SDKMGR="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -226,6 +334,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -234,10 +355,26 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used: it runs
+      # `sdkmanager tools`, and the legacy "tools" package is no longer published
+      # upstream, so the action fails with "Failed to find package 'tools'".
+      # The runner already ships a complete Android SDK; we just use it.
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
+      - name: Install Android SDK components (platform, build-tools, NDK)
+        run: |
+          SDKMGR="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -271,6 +408,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -279,10 +429,26 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used: it runs
+      # `sdkmanager tools`, and the legacy "tools" package is no longer published
+      # upstream, so the action fails with "Failed to find package 'tools'".
+      # The runner already ships a complete Android SDK; we just use it.
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
+      - name: Install Android SDK components (platform, build-tools, NDK)
+        run: |
+          SDKMGR="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -312,6 +478,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           submodules: recursive
+
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
 
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
@@ -344,6 +523,19 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
+      # committed, so "submodules: recursive" checks out nothing and the Rust
+      # build fails with "failed to read .../zeroclaw/Cargo.toml". Recover by
+      # cloning it directly. Permanent fix (once, in the repo):
+      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          if [ -f zeroclaw/Cargo.toml ]; then exit 0; fi
+          echo "::warning::The 'zeroclaw' submodule is not registered (no gitlink committed)."
+          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+          rm -rf zeroclaw
+          git clone --depth 1 "$URL" zeroclaw || { echo "::error::Could not obtain the zeroclaw submodule."; exit 1; }
+
       - name: Apply submodule patches
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
 
@@ -352,10 +544,26 @@ jobs:
           distribution: temurin
           java-version: 17
 
-      - uses: android-actions/setup-android@v3
+      # NOTE: "android-actions/setup-android" is intentionally NOT used: it runs
+      # `sdkmanager tools`, and the legacy "tools" package is no longer published
+      # upstream, so the action fails with "Failed to find package 'tools'".
+      # The runner already ships a complete Android SDK; we just use it.
+      - name: Set up Android SDK (preinstalled on the runner)
+        run: |
+          echo "ANDROID_HOME=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "ANDROID_SDK_ROOT=$ANDROID_HOME" >> "$GITHUB_ENV"
+          echo "$ANDROID_HOME/cmdline-tools/latest/bin" >> "$GITHUB_PATH"
+          echo "$ANDROID_HOME/platform-tools" >> "$GITHUB_PATH"
+          git config --global --add safe.directory "$ANDROID_HOME" || true
 
-      - name: Install NDK
-        run: sdkmanager "ndk;27.2.12479018"
+      - name: Install Android SDK components (platform, build-tools, NDK)
+        run: |
+          SDKMGR="$(command -v sdkmanager || true)"
+          if [ -z "$SDKMGR" ]; then
+            SDKMGR="$(ls -d "$ANDROID_HOME"/cmdline-tools/*/bin/sdkmanager 2>/dev/null | sort -V | tail -1)"
+          fi
+          yes | "$SDKMGR" --licenses > /dev/null 2>&1 || true
+          "$SDKMGR" --install "platform-tools" "platforms;android-35" "build-tools;35.0.0" "ndk;27.2.12479018"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
