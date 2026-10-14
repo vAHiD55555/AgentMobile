@@ -219,20 +219,32 @@ jobs:
           echo "commit=${ZC_COMMIT}" >> "$GITHUB_OUTPUT"
           echo "ZeroClaw upstream: v${ZC_VERSION} (${ZC_COMMIT})"
 
-      - name: Create GitHub Release
+      - name: Create or update GitHub Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
+          set -euo pipefail
+          TAG="${{ steps.version.outputs.tag }}"
           gh api repos/${{ github.repository }}/releases/generate-notes \
-            -f tag_name="${{ steps.version.outputs.tag }}" \
-            --jq '.body' > /tmp/auto-notes.md
+            -f tag_name="$TAG" \
+            --jq '.body' > /tmp/auto-notes.md || true
           printf '## ZeroClaw Upstream\n' > /tmp/release-notes.md
           printf 'Built against [ZeroClaw](https://github.com/zeroclaw-labs/zeroclaw) v%s (`%s`)\n\n' \
             "${{ steps.upstream.outputs.version }}" "${{ steps.upstream.outputs.commit }}" >> /tmp/release-notes.md
           cat /tmp/auto-notes.md >> /tmp/release-notes.md
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file /tmp/release-notes.md \
-            ${{ steps.prerelease.outputs.flag }} \
-            lib/build/outputs/aar/lib-release.aar \
-            app/build/outputs/apk/release/zeroclaw_android.apk
+
+          ASSETS="lib/build/outputs/aar/lib-release.aar app/build/outputs/apk/release/zeroclaw_android.apk"
+
+          # Idempotent: the "Build APK" workflow may already have created a release
+          # for this tag (with the banner + Persian summary body). In that case we
+          # only add/refresh our assets and DO NOT overwrite the existing body.
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            echo "Release $TAG already exists -> uploading assets (keeping existing body)."
+            gh release upload "$TAG" $ASSETS --clobber
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/release-notes.md \
+              ${{ steps.prerelease.outputs.flag }} \
+              $ASSETS
+          fi
