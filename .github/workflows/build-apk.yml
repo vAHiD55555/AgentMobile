@@ -71,6 +71,29 @@ jobs:
         with:
           submodules: recursive
 
+      # The "zeroclaw" submodule is pinned to the version in
+      # agentmobile/Cargo.lock. If "submodules: recursive" did not materialise it
+      # (missing gitlink or a shallow/failed fetch) clone the exact pinned tag.
+      - name: Ensure zeroclaw submodule is present
+        run: |
+          set -euo pipefail
+          ZC_LOCK_VER="$(awk '/^name = "zeroclaw"$/{f=1} f && /^version = /{gsub(/[",]/,""); print $3; exit}' agentmobile/Cargo.lock)"
+          echo "Cargo.lock pins zeroclaw ${ZC_LOCK_VER}"
+          if [ ! -f zeroclaw/Cargo.toml ]; then
+            URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+            echo "::warning::zeroclaw submodule not checked out; cloning ${URL} at v${ZC_LOCK_VER}"
+            rm -rf zeroclaw
+            git clone --branch "v${ZC_LOCK_VER}" --depth 1 "$URL" zeroclaw
+          fi
+          ZC_VER="$(grep -m1 '^version' zeroclaw/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          ZC_COMMIT="$(git -C zeroclaw rev-parse --short HEAD)"
+          echo "zeroclaw in tree: v${ZC_VER} (${ZC_COMMIT})"
+          if [ "${ZC_VER}" != "${ZC_LOCK_VER}" ]; then
+            echo "::error::zeroclaw version mismatch: tree has v${ZC_VER}, Cargo.lock pins v${ZC_LOCK_VER}."
+            exit 1
+          fi
+          echo "OK: zeroclaw v${ZC_VER} matches Cargo.lock."
+
       # Optional: some forks carry patches for the vendored "zeroclaw" submodule.
       # This is a no-op when no patches/ directory exists.
       - name: Apply submodule patches (optional)

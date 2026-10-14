@@ -37,30 +37,31 @@ jobs:
           fetch-depth: 0
 
       # ------------------------------------------------------------------
-      # The "zeroclaw" submodule is declared in .gitmodules but no gitlink is
-      # committed for it, so "submodules: recursive" checks out nothing and the
-      # Rust build fails with:
-      #   failed to read `.../zeroclaw/Cargo.toml` (No such file or directory)
-      # This step recovers by cloning the submodule directly from the URL in
-      # .gitmodules. The permanent fix is to run, once, in the repository:
-      #   git submodule add https://github.com/zeroclaw-labs/zeroclaw.git zeroclaw
-      #   git commit -m "chore: register zeroclaw submodule" && git push
+      # The "zeroclaw" submodule is registered (gitlink committed) and pinned to
+      # the version that agentmobile/Cargo.lock requires. "submodules: recursive"
+      # checks it out; this step verifies the checked-out version against
+      # Cargo.lock and, if the submodule is missing, clones the exact pinned tag.
       # ------------------------------------------------------------------
       - name: Ensure zeroclaw submodule is present
         run: |
-          if [ -f zeroclaw/Cargo.toml ]; then
-            echo "zeroclaw submodule is present."
-            exit 0
+          set -euo pipefail
+          ZC_LOCK_VER="$(awk '/^name = "zeroclaw"$/{f=1} f && /^version = /{gsub(/[",]/,""); print $3; exit}' agentmobile/Cargo.lock)"
+          echo "Cargo.lock pins zeroclaw ${ZC_LOCK_VER}"
+          if [ ! -f zeroclaw/Cargo.toml ]; then
+            URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
+            echo "::warning::zeroclaw submodule not checked out; cloning ${URL} at v${ZC_LOCK_VER}"
+            rm -rf zeroclaw
+            git clone --branch "v${ZC_LOCK_VER}" --depth 1 "$URL" zeroclaw
           fi
-          echo "::warning::The 'zeroclaw' submodule is not registered in this repository (no gitlink committed)."
-          URL="$(git config -f .gitmodules --get submodule.zeroclaw.url || echo https://github.com/zeroclaw-labs/zeroclaw.git)"
-          rm -rf zeroclaw
-          if git clone --depth 1 "$URL" zeroclaw; then
-            echo "Cloned zeroclaw from $URL"
-          else
-            echo "::error::Could not obtain the zeroclaw submodule. Run 'git submodule add $URL zeroclaw' once and commit the gitlink."
+          ZC_VER="$(grep -m1 '^version' zeroclaw/Cargo.toml | sed 's/.*"\(.*\)".*/\1/')"
+          ZC_COMMIT="$(git -C zeroclaw rev-parse --short HEAD)"
+          echo "zeroclaw in tree: v${ZC_VER} (${ZC_COMMIT})"
+          if [ "${ZC_VER}" != "${ZC_LOCK_VER}" ]; then
+            echo "::error::zeroclaw version mismatch: tree has v${ZC_VER}, Cargo.lock pins v${ZC_LOCK_VER}."
+            echo "::error::Pin it with: git -C zeroclaw fetch --tags && git -C zeroclaw checkout v${ZC_LOCK_VER} && git add zeroclaw && git commit && git push"
             exit 1
           fi
+          echo "OK: zeroclaw v${ZC_VER} matches Cargo.lock."
 
       - name: Apply submodule patches (optional)
         run: if ls patches/*.patch 1>/dev/null 2>&1; then cd zeroclaw && git apply ../patches/*.patch; fi
