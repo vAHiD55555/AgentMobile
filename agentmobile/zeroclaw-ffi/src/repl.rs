@@ -721,7 +721,7 @@ mod tests {
     fn test_repl_models_anthropic() {
         let result = eval_repl_inner(r#"models("anthropic")"#.into()).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
+        assert_ne!(parsed.len(), 0);
     }
 
     #[test]
@@ -734,6 +734,6 @@ mod tests {
     fn test_repl_models_with_key_anthropic() {
         let result = eval_repl_inner(r#"models_with_key("anthropic", "")"#.into()).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
+        assert_ne!(parsed.len(), 0);
     }
 }

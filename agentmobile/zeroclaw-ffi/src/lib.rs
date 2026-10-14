@@ -1600,7 +1600,7 @@ mod tests {
     fn test_discover_models_anthropic() {
         let result = discover_models("anthropic".into(), String::new(), None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
+        assert_ne!(parsed.len(), 0);
         assert!(parsed[0].get("id").is_some());
         assert!(parsed[0].get("name").is_some());
     }

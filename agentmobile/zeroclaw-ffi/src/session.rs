@@ -3230,7 +3230,7 @@ mod tests {
     #[test]
     fn test_truncate_tool_args_hint_invalid_json() {
         let hint = truncate_tool_args_hint("shell", "not json");
-        assert!(hint.is_empty());
+        assert_eq!(hint, "");
     }
 
     // ── build_native_assistant_history tests ─────────────────────────

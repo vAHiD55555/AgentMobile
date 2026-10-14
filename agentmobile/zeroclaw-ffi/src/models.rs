@@ -170,7 +170,7 @@ mod tests {
     fn test_anthropic_models_returns_json() {
         let result = anthropic_models();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
+        assert_ne!(parsed.len(), 0);
         assert!(parsed[0].get("id").is_some());
         assert!(parsed[0].get("name").is_some());
     }
@@ -241,6 +241,6 @@ mod tests {
     fn test_discover_anthropic_returns_json() {
         let result = discover_models_inner("anthropic".into(), String::new(), None).unwrap();
         let parsed: Vec<serde_json::Value> = serde_json::from_str(&result).unwrap();
-        assert!(!parsed.is_empty());
+        assert_ne!(parsed.len(), 0);
     }
 }

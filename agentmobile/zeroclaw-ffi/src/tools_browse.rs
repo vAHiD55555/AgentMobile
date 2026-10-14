@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(spec.name, "shell");
         assert_eq!(spec.source, "built-in");
         assert_eq!(spec.parameters_json, "{}");
-        assert!(!spec.description.is_empty());
+        assert_ne!(spec.description, "");
     }
 
     #[test]

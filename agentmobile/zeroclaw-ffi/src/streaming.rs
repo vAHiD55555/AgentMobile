@@ -241,7 +241,7 @@ mod tests {
         let raw = "Just a normal response.";
         let (clean, thinking) = crate::session::extract_thinking_from_text(raw);
         assert_eq!(clean, "Just a normal response.");
-        assert!(thinking.is_empty());
+        assert_eq!(thinking, "");
 
         let listener = MockListener::new();
         if !thinking.is_empty() {
