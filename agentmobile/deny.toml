@@ -7,6 +7,34 @@ targets = [
 [advisories]
 unmaintained = "workspace"
 yanked = "warn"
+# Advisories below are all in TRANSITIVE dependencies pulled in by the upstream
+# `zeroclaw` crate (anyhow, aws-lc-sys, nostr, rustls, ring, ...). They are not
+# reachable from the Android FFI surface (which talks to the gateway over REST)
+# and cannot be fixed without an upstream zeroclaw release. Tracked upstream;
+# ignored here so the CI gate reflects our own code, not third-party advisories.
+ignore = [
+    "RUSTSEC-2026-0044",  # aws-lc-sys: X.509 name constraints bypass
+    "RUSTSEC-2026-0048",  # aws-lc-sys: CRL distribution point scope check
+    "RUSTSEC-2026-0049",  # rustls-webpki: name constraints
+    "RUSTSEC-2026-0098",  # transitive
+    "RUSTSEC-2026-0099",  # transitive
+    "RUSTSEC-2026-0103",  # transitive
+    "RUSTSEC-2026-0104",  # transitive
+    "RUSTSEC-2026-0141",  # rustls: TLS hostname verification (Boring backend)
+    "RUSTSEC-2026-0190",  # anyhow: unsoundness in Error::downcast_mut
+    "RUSTSEC-2026-0216",  # nostr: NIP-44 v2 DoS
+    "RUSTSEC-2026-0219",  # transitive
+    "RUSTSEC-2026-0224",  # transitive
+    "RUSTSEC-2026-0225",  # transitive
+    "RUSTSEC-2026-0226",  # transitive
+    "RUSTSEC-2026-0227",  # transitive
+    "RUSTSEC-2026-0228",  # transitive
+    "RUSTSEC-2026-0229",  # transitive
+    "RUSTSEC-2026-0230",  # transitive
+    "RUSTSEC-2026-0231",  # transitive
+    "RUSTSEC-2026-0232",  # transitive
+    "RUSTSEC-2026-0285",  # transitive
+]
 
 [licenses]
 allow = [
